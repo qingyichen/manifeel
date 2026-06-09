@@ -4,7 +4,7 @@ set -euo pipefail
 # -------------------------
 # User-editable parameters
 # -------------------------
-SEED=${SEED:-44}
+SEED=${SEED:-0}
 NUM_DEMOS=${NUM_DEMOS:-50}
 NUM_EPOCH=${NUM_EPOCH:-1000}
 
@@ -63,7 +63,8 @@ fi
 apptainer exec --nv --cleanenv --env LD_PRELOAD= "${REPO_ROOT}/${CONTAINER_FILE}" bash -ic "
   set -e
   conda activate manifeel
-  export LD_LIBRARY_PATH=\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH}
+  export LD_LIBRARY_PATH=/.singularity.d/libs:\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH}
+  export PYTHONIOENCODING=utf-8
   cd '${REPO_ROOT}'
   python train.py ${HYDRA_ARGS[*]}
 "
