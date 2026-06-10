@@ -4,6 +4,7 @@
 #  based on pusht_image_runner.py
 
 # from envs.env_wrapper import IsaacEnvWrapper
+import os
 from envs.vistac_isaacgymenv_wrapper import SingleIsaacEnvWrapper
 from isaacgymenvs.tasks.tacsl.tacsl_task_insertion import TacSLTaskInsertion
 from isaacgymenvs.utils.reformat import omegaconf_to_dict
@@ -277,6 +278,11 @@ class ManifeelRunner(BaseImageRunner):
             # visualize sim
             video_path = all_video_paths[i]
             if video_path is not None:
+                success = int(max_reward >= 1.0)
+                stem, ext = os.path.splitext(video_path)
+                new_path = f"{stem}_{success}{ext}"
+                os.rename(video_path, new_path)
+                video_path = new_path
                 sim_video = wandb.Video(video_path)
                 log_data[prefix+f'sim_video_{seed}'] = sim_video
 

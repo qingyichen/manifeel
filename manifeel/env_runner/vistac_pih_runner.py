@@ -10,6 +10,7 @@ from manifeel.envs.vistac_isaacgym_multiple_env_wrapper import MultipleIsaacEnvW
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_image_runner import BaseImageRunner
+import os
 import cv2
 import hydra
 from omegaconf import OmegaConf
@@ -40,12 +41,30 @@ class ManifeelRunner(BaseImageRunner):
         super().__init__(output_dir)
 
         # obtain config for isaacgym environment
-        # path relative to Gym's Hydra search path (cfg dir)
+        import pathlib as _pl
         isaacgym_cfg = hydra.compose(config_name=isaacgym_cfg_name)
-        isaacgym_cfg['shape_meta'] = OmegaConf.create(shape_meta)
+        OmegaConf.set_struct(isaacgym_cfg, False)
 
+        # hydra.compose() called after another compose() (eval mode) can return
+        # an incomplete config: the first compose registers a task package
+        # (e.g. task=vision_wrist) that contaminates the second compose's
+        # defaults resolution, so _self_ root keys (light_factor, sim_device,
+        # etc.) are dropped. Load the yaml directly as a fallback and merge the
+        # task subtree from the contaminated compose.
+        if 'light_factor' not in isaacgym_cfg:
+            print(f"[runner] hydra.compose returned incomplete isaacgym config "
+                  f"(keys: {sorted(isaacgym_cfg.keys())}); "
+                  f"loading {isaacgym_cfg_name} from yaml directly")
+            _config_dir = _pl.Path(__file__).parent.parent / 'config'
+            _base = OmegaConf.load(_config_dir / isaacgym_cfg_name)
+            OmegaConf.set_struct(_base, False)
+            if 'task' in isaacgym_cfg:
+                _base.task = isaacgym_cfg.task
+            isaacgym_cfg = _base
+
+        shape_meta_container = OmegaConf.to_container(shape_meta, resolve=True) if OmegaConf.is_config(shape_meta) else shape_meta
+        isaacgym_cfg.shape_meta = OmegaConf.create(shape_meta_container)
         if n_test is not None:
-            # override number of evaluated environments
             isaacgym_cfg.num_envs = n_test
         
         steps_per_render = max(10 // fps, 1)
@@ -178,6 +197,11 @@ class ManifeelRunner(BaseImageRunner):
             # visualize sim
             video_path = all_video_paths[i]
             if video_path is not None:
+                success = int(max_reward >= 1.0)
+                stem, ext = os.path.splitext(video_path)
+                new_path = f"{stem}_{success}{ext}"
+                os.rename(video_path, new_path)
+                video_path = new_path
                 sim_video = wandb.Video(video_path)
                 log_data[prefix+f'sim_video_{i}'] = sim_video
                 log_data[prefix+f'sim_video_{i}'] = sim_video
