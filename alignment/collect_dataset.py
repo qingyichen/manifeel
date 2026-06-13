@@ -152,7 +152,9 @@ def _to_storage_layout(value):
 
 @click.command()
 @click.option('-c', '--checkpoint', required=True)
-@click.option('-o', '--output', required=True, help='Output zarr directory')
+@click.option('-o', '--output', default=None,
+              help='Output zarr path (default: alignment/data/<run_name>.zarr, '
+                   'with run_name taken from the checkpoint directory)')
 @click.option('-n', '--cfg_name', default='train_diffusion_workspace.yaml')
 @click.option('-d', '--device', default='cuda:0')
 @click.option('--isaacgym_cfg', default=None, help='Override isaacgym config yaml')
@@ -174,11 +176,16 @@ def _to_storage_layout(value):
 @click.option('--append', is_flag=True, default=False, help='Append to an existing zarr dataset')
 def main(checkpoint, output, cfg_name, device, isaacgym_cfg, num_envs, n_rounds,
          max_steps, seed, stop_on_all_done, post_success_steps, skip_keys, append):
+    if output is None:
+        # .../<run_name>/<train_seed>/checkpoints/<file>.ckpt -> <run_name>
+        run_name = pathlib.Path(checkpoint).resolve().parents[2].name
+        output = str(pathlib.Path('alignment/data') / f'{run_name}.zarr')
     if os.path.exists(output) and not append:
         raise click.ClickException(
             f"Output path {output} already exists. Pass --append to add episodes to it.")
     pathlib.Path(output).parent.mkdir(parents=True, exist_ok=True)
     skip_keys = {k.strip() for k in skip_keys.split(',') if k.strip()}
+    print(f"[collect] output: {output}")
 
     # ----- compose configs the same way eval.py does -----
     config_dir = pathlib.Path(__file__).resolve().parent.parent / 'manifeel' / 'config'
