@@ -51,6 +51,7 @@ import numpy as np
 import torch
 import yaml
 from omegaconf import OmegaConf, open_dict
+from tqdm import tqdm
 
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
@@ -236,7 +237,7 @@ def main(checkpoint, output, cfg_name, device, isaacgym_cfg, num_envs, n_rounds,
         episode_seed = list(np.asarray(replay_buffer.meta['episode_seed']))
 
     # ----- rollout -----
-    for round_idx, round_seed in enumerate(round_seeds):
+    for round_idx, round_seed in tqdm(enumerate(round_seeds), total=n_rounds, desc="rounds"):
         env.seed(round_seed)
         policy.reset()
         policy_obs = env.reset()
@@ -246,6 +247,7 @@ def main(checkpoint, output, cfg_name, device, isaacgym_cfg, num_envs, n_rounds,
         records = collections.defaultdict(list)
         done_mask = np.zeros(num_envs, dtype=bool)
         t = 0
+        pbar = tqdm(total=max_steps, desc=f"  round {round_idx + 1} steps", leave=False)
         while t < max_steps:
             stacked = {
                 key: stack_last_n_obs([o[key] for o in obs_history], n_obs_steps)
@@ -270,10 +272,12 @@ def main(checkpoint, output, cfg_name, device, isaacgym_cfg, num_envs, n_rounds,
                 obs_history.append(policy_obs)
                 done_mask |= done.astype(bool)
                 t += 1
+                pbar.update(1)
                 if t >= max_steps:
                     break
             if stop_on_all_done and done_mask.all():
                 break
+        pbar.close()
 
         # ----- write one episode per env -----
         # Per-step snapshots are taken *before* each action, so the state after the
