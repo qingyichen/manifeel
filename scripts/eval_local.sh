@@ -9,22 +9,21 @@ set -euo pipefail
 CHECKPOINT=${CHECKPOINT:-}
 
 # Where to write eval videos and eval_log.json, relative to REPO_ROOT.
-OUTPUT_DIR=${OUTPUT_DIR:-data/eval_output}
+# Defaults to data/eval_output/{model_name}/{timestamp} derived from CHECKPOINT.
+OUTPUT_DIR=${OUTPUT_DIR:-}
 
 # Hydra config name used during training (same --config-name as run_local.sh).
 CFG_NAME=${CFG_NAME:-train_diffusion_workspace.yaml}
 
-# Task config, must match what was used during training.
-TASK_NAME=${TASK_NAME:-vision_wrist}  # vision_wrist | vistac_wrist | visff_wrist | ...
+# Number of parallel envs to evaluate (leave empty to use the value from the task yaml).
+N_TEST=${N_TEST:-}
 
-# Number of parallel envs to evaluate (overrides task yaml's n_test).
-N_TEST=${N_TEST:-22}
-
-# Number of envs to record video for.
-N_TEST_VIS=${N_TEST_VIS:-6}
+# Number of envs to record video for (leave empty to use the value from the task yaml).
+N_TEST_VIS=${N_TEST_VIS:-}
 
 # Set to isaacgym_config_gui.yaml to open the interactive viewer (1 env, needs a display).
-ISAACGYM_CONFIG=${ISAACGYM_CONFIG:-isaacgym_config_usb.yaml}
+# Leave empty to reuse the isaacgym config from the training run.
+ISAACGYM_CONFIG=${ISAACGYM_CONFIG:-}
 
 # cuda device
 DEVICE=${DEVICE:-cuda:0}
@@ -52,28 +51,37 @@ if [[ "${CHECKPOINT}" != /* ]]; then
   CHECKPOINT="${REPO_ROOT}/${CHECKPOINT}"
 fi
 
+# Derive model name from the outputs/{model_name}/... portion of the checkpoint path.
+MODEL_NAME=$(echo "${CHECKPOINT}" | sed 's|.*/outputs/\([^/]*\)/.*|\1|')
+OUTPUT_DIR=${OUTPUT_DIR:-data/eval_output/${MODEL_NAME}/$(date +%Y%m%d_%H%M%S)}
+
 echo "Checkpoint : ${CHECKPOINT}"
 echo "Output dir : ${REPO_ROOT}/${OUTPUT_DIR}"
-echo "Config     : ${CFG_NAME}  task=${TASK_NAME}"
-echo "IsaacGym   : ${ISAACGYM_CONFIG}  (headless=$(grep -m1 'headless' "${REPO_ROOT}/manifeel/config/${ISAACGYM_CONFIG}" | awk '{print $2}'))"
-echo "n_test=${N_TEST}  n_test_vis=${N_TEST_VIS}"
+echo "Config     : ${CFG_NAME}"
 echo ""
 
 # -------------------------
 # Run inside Apptainer
 # -------------------------
-apptainer exec --nv --cleanenv --env LD_PRELOAD= "${REPO_ROOT}/${CONTAINER_FILE}" bash -ic "
+apptainer exec --nv --cleanenv \
+  --env LD_PRELOAD= \
+  --env DISPLAY="${DISPLAY:-:0}" \
+  --env XAUTHORITY="${XAUTHORITY:-${HOME}/.Xauthority}" \
+  --bind /tmp/.X11-unix \
+  "${REPO_ROOT}/${CONTAINER_FILE}" bash -ic "
   set -e
   conda activate manifeel
   export LD_LIBRARY_PATH=/.singularity.d/libs:\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH}
   export PYTHONIOENCODING=utf-8
   cd '${REPO_ROOT}'
-  python eval.py \
-    --checkpoint '${CHECKPOINT}' \
-    --output_dir '${OUTPUT_DIR}' \
-    --cfg_name '${CFG_NAME}' \
-    --device '${DEVICE}' \
-    --n_test '${N_TEST}' \
-    --n_test_vis '${N_TEST_VIS}' \
-    --isaacgym_cfg '${ISAACGYM_CONFIG}'
+  EVAL_ARGS=(
+    --checkpoint '${CHECKPOINT}'
+    --output_dir '${OUTPUT_DIR}'
+    --cfg_name '${CFG_NAME}'
+    --device '${DEVICE}'
+  )
+  [[ -n '${N_TEST}' ]]         && EVAL_ARGS+=(--n_test '${N_TEST}')
+  [[ -n '${N_TEST_VIS}' ]]     && EVAL_ARGS+=(--n_test_vis '${N_TEST_VIS}')
+  [[ -n '${ISAACGYM_CONFIG}' ]] && EVAL_ARGS+=(--isaacgym_cfg '${ISAACGYM_CONFIG}')
+  python eval.py "\${EVAL_ARGS[@]}"
 "

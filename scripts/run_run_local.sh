@@ -1,0 +1,17 @@
+DATASET_PATH=data/bulb_quan_Sep19 \
+    ISAACGYM_CONFIG=isaacgym_config_bulb.yaml \
+    ENV_TAG=bulb_0610 \
+    TASK_NAME=vision_wrist \
+    INPUT_TYPE=vision \
+    ACTION_SHAPE=7 \
+    LOG_NAME=dp_bulb \
+    bash scripts/run_local.sh
+
+DATASET_PATH=data/bulb_quan_Sep19 \
+    ISAACGYM_CONFIG=isaacgym_config_bulb.yaml \
+    ENV_TAG=bulb_0610 \
+    TASK_NAME=visff_wrist \
+    INPUT_TYPE=tacff \
+    ACTION_SHAPE=7 \
+    LOG_NAME=dp_bulb \
+    bash scripts/run_local.sh
