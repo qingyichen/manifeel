@@ -192,8 +192,8 @@ class ManifeelRunner(BaseImageRunner):
             video_path = all_video_paths[i]
             if video_path is not None:
                 success = int(max_reward >= 1.0)
-                stem, ext = os.path.splitext(video_path)
-                new_path = f"{stem}_{success}{ext}"
+                ext = os.path.splitext(video_path)[1]
+                new_path = os.path.join(os.path.dirname(video_path), f"seed{self.test_seed + i}_{success}{ext}")
                 os.rename(video_path, new_path)
                 video_path = new_path
                 sim_video = wandb.Video(video_path)
