@@ -118,12 +118,12 @@ class ProxyEncoder(nn.Module):
 
 
 # Helper functions for loss computation and checkpoint loading
-_LOSS_FNS = {'cosine': cosine_loss, 'mse': mse_loss}
 def cosine_loss(z1: torch.Tensor, z2: torch.Tensor) -> torch.Tensor:
     return (1.0 - F.cosine_similarity(z1, z2, dim=-1)).mean()
-
 def mse_loss(z1: torch.Tensor, z2: torch.Tensor) -> torch.Tensor:
     return F.mse_loss(z1, z2)
+_LOSS_FNS = {'cosine': cosine_loss, 'mse': mse_loss}
+
 
 def _load_training_overrides(checkpoint_path: str):
     overrides_file = pathlib.Path(checkpoint_path).parent.parent / '.hydra' / 'overrides.yaml'
