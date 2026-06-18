@@ -1,5 +1,6 @@
 DATASET_PATH=data/bulb_quan_Sep19 \
     ISAACGYM_CONFIG=isaacgym_config_bulb.yaml \
+    NUM_EPOCHS=300 \
     ENV_TAG=bulb_0610 \
     TASK_NAME=vision_wrist \
     INPUT_TYPE=vision \
@@ -9,6 +10,7 @@ DATASET_PATH=data/bulb_quan_Sep19 \
 
 DATASET_PATH=data/bulb_quan_Sep19 \
     ISAACGYM_CONFIG=isaacgym_config_bulb.yaml \
+    NUM_EPOCHS=300 \
     ENV_TAG=bulb_0610 \
     TASK_NAME=visff_wrist \
     INPUT_TYPE=tacff \
