@@ -1,9 +1,9 @@
 """
 Offline alignment: proxy encoder (wrist image + joint torque + state) → TacFF feature space.
 
-Teacher: frozen ff_head from a DiffusionTacffPolicy checkpoint.
-Student: ProxyEncoder(wrist + dof_force + dof_pos + state).
-Loss:    cosine distance between z_proxy and z_tacff.
+Teacher: frozen TacFF ResNet-18 from the policy's MultiImageObsEncoder.
+Student: ProxyEncoder(wrist + dof_pos + dof_force + state).
+Loss:    MSE or cosine distance between z_proxy and z_tacff.
 
 The proxy can later substitute the tactile encoder at inference time on hardware
 that has a wrist camera and joint torque sensors but no tactile finger.
@@ -135,7 +135,7 @@ def _load_training_overrides(checkpoint_path: str):
 
 
 def load_tacff_encoder(checkpoint_path: str, cfg_name: str, device: torch.device):
-    """Load ff_head, normalizer, and wrist backbone from a DiffusionTacffPolicy checkpoint."""
+    """Load the TacFF encoder, its input transform, the normalizer, and the wrist backbone."""
     config_dir = (
         pathlib.Path(__file__).resolve().parents[2] / 'manifeel' / 'config'
     )
@@ -157,14 +157,17 @@ def load_tacff_encoder(checkpoint_path: str, cfg_name: str, device: torch.device
     for p in policy.parameters():
         p.requires_grad_(False)
 
-    wrist_encoder = policy.obs_encoder.key_model_map['wrist']
-    return policy.ff_head, policy.normalizer, wrist_encoder
+    obs_encoder = policy.obs_encoder
+    tacff_encoder    = obs_encoder.key_model_map['tactile_force_field_right']
+    tacff_transform = obs_encoder.key_transform_map['tactile_force_field_right']
+    wrist_encoder    = obs_encoder.key_model_map['wrist']
+    return tacff_encoder, tacff_transform, policy.normalizer, wrist_encoder
 
 
 # Training loop with command-line interface
 @click.command()
 @click.option('--checkpoint', '-c', required=True,
-              help='DiffusionTacffPolicy checkpoint path')
+              help='Policy checkpoint path (must include TacFF in obs)')
 @click.option('--task',       '-t', default=None,
               help='Task name; infers zarr_path=alignment/models/<task>.zarr '
                    'and output=alignment/models/<task>_proxy.ckpt')
@@ -187,7 +190,7 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
          lr, val_ratio, num_workers, loss, freeze_img_encoder):
     if task is not None:
         if zarr_path is None:
-            zarr_path = f'alignment/models/{task}.zarr'
+            zarr_path = f'alignment/data/{task}.zarr'
         if output is None:
             output = f'alignment/models/{task}_proxy.ckpt'
     if zarr_path is None or output is None:
@@ -195,8 +198,9 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
     device = torch.device(device)
 
     # frozen teacher
-    print('[align] loading teacher (ff_head) from checkpoint ...')
-    ff_head, normalizer, wrist_encoder = load_tacff_encoder(checkpoint, cfg_name, device)
+    print('[align] loading teacher (TacFF encoder) from checkpoint ...')
+    tacff_encoder, tacff_transform, normalizer, wrist_encoder = load_tacff_encoder(
+        checkpoint, cfg_name, device)
     tacff_normalizer = normalizer['tactile_force_field_right']
     if freeze_img_encoder:
         for p in wrist_encoder.parameters():
@@ -224,6 +228,17 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
     loss_fn = _LOSS_FNS[loss]
     print(f'[align] loss: {loss}')
 
+    # log z_tacff magnitude so we can interpret the MSE scale
+    with torch.no_grad():
+        sample_tacff = dataset.tacff[:256].permute(0, 3, 1, 2).to(device)
+        sample_norm  = tacff_normalizer.normalize(sample_tacff)
+        sample_ztacff = tacff_encoder(tacff_transform(sample_norm))
+        print(f'[align] z_tacff magnitude — '
+              f'mean={sample_ztacff.abs().mean():.4f}  '
+              f'std={sample_ztacff.std():.4f}  '
+              f'max={sample_ztacff.abs().max():.4f}')
+    del sample_tacff, sample_norm, sample_ztacff
+
     # ── proxy encoder ──
     lowdim_dim = 7 + 9 + 9   # state + dof_pos + dof_force
     proxy = ProxyEncoder(lowdim_dim=lowdim_dim, img_encoder=wrist_encoder).to(device)
@@ -240,11 +255,10 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
             img, lowdim, tacff_raw = (
                 img.to(device), lowdim.to(device), tacff_raw.to(device))
 
-            # teacher: normalize TacFF → flatten → frozen ff_head
-            tacff_norm = tacff_normalizer.normalize(tacff_raw)
-            tacff_flat = tacff_norm.reshape(tacff_norm.shape[0], -1)   # (B, 420)
+            # teacher: normalize → transform → frozen TacFF ResNet
             with torch.no_grad():
-                z_tacff = ff_head(tacff_flat)
+                z_tacff = tacff_encoder(
+                    tacff_transform(tacff_normalizer.normalize(tacff_raw)))
 
             z_proxy = proxy(img, lowdim)
             loss = loss_fn(z_proxy, z_tacff)
@@ -264,15 +278,14 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
             for img, lowdim, tacff_raw in val_loader:
                 img, lowdim, tacff_raw = (
                     img.to(device), lowdim.to(device), tacff_raw.to(device))
-                tacff_norm = tacff_normalizer.normalize(tacff_raw)
-                tacff_flat = tacff_norm.reshape(tacff_norm.shape[0], -1)
-                z_tacff = ff_head(tacff_flat)
+                z_tacff = tacff_encoder(
+                    tacff_transform(tacff_normalizer.normalize(tacff_raw)))
                 z_proxy = proxy(img, lowdim)
                 val_loss += loss_fn(z_proxy, z_tacff).item()
         val_loss /= len(val_loader)
 
         print(f'[align] epoch {epoch:3d}/{epochs}  '
-              f'train={train_loss:.4f}  val={val_loss:.4f}')
+              f'train={train_loss:.6f}  val={val_loss:.6f}')
 
         if val_loss < best_val:
             best_val = val_loss
