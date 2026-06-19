@@ -230,13 +230,17 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
 
     # log z_tacff magnitude so we can interpret the MSE scale
     with torch.no_grad():
-        sample_tacff = dataset.tacff[:256].permute(0, 3, 1, 2).to(device)
+        idx = torch.randperm(len(dataset))[:256]
+        sample_tacff = dataset.tacff[idx].permute(0, 3, 1, 2).to(device)
         sample_norm  = tacff_normalizer.normalize(sample_tacff)
         sample_ztacff = tacff_encoder(tacff_transform(sample_norm))
-        print(f'[align] z_tacff magnitude — '
-              f'mean={sample_ztacff.abs().mean():.4f}  '
-              f'std={sample_ztacff.std():.4f}  '
-              f'max={sample_ztacff.abs().max():.4f}')
+        print(f'[align] raw tacff    — mean={dataset.tacff[idx].abs().mean():.8f}  '
+              f'max={dataset.tacff[idx].abs().max():.8f}')
+        print(f'[align] normed tacff — mean={sample_norm.abs().mean():.8f}  '
+              f'max={sample_norm.abs().max():.8f}')
+        print(f'[align] z_tacff      — mean={sample_ztacff.abs().mean():.8f}  '
+              f'std={sample_ztacff.std():.8f}  '
+              f'max={sample_ztacff.abs().max():.8f}')
     del sample_tacff, sample_norm, sample_ztacff
 
     # ── proxy encoder ──
@@ -285,7 +289,7 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
         val_loss /= len(val_loader)
 
         print(f'[align] epoch {epoch:3d}/{epochs}  '
-              f'train={train_loss:.6f}  val={val_loss:.6f}')
+              f'train={train_loss:.8f}  val={val_loss:.8f}')
 
         if val_loss < best_val:
             best_val = val_loss
