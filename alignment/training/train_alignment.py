@@ -178,7 +178,7 @@ def load_tacff_encoder(checkpoint_path: str, cfg_name: str, device: torch.device
 @click.option('--cfg_name',   default='train_diffusion_workspace.yaml')
 @click.option('--device',     '-d', default='cuda:0')
 @click.option('--epochs',     default=100,   type=int)
-@click.option('--batch_size', default=256,   type=int)
+@click.option('--batch_size', default=128,   type=int)
 @click.option('--lr',         default=1e-4,  type=float)
 @click.option('--val_ratio',  default=0.1,   type=float)
 @click.option('--num_workers',default=4,     type=int)

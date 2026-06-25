@@ -8,11 +8,15 @@ Modalities: any subset of zarr obs keys, e.g.:
               wrist,front,dof_force,state      (multi-view + torque)
 Sequence:   sliding window of --seq_len steps over each episode;
             label = success flag at the last step of the window.
-Output:     alignment/classifiers/<task>/best.ckpt + train_log.csv
+Output:     models/<task>/classifiers/best.ckpt + train_log.csv + settings.json
 
-Key type is inferred from the stored per-step shape:
-  ndim >= 3  (H, W, C) → image key  → separate ResNet-18 encoder
-  ndim == 1  (D,)      → lowdim key → shared MLP encoder (all lowdim concat'd)
+Key type is inferred from the stored per-step shape (size-based, not ndim):
+  ndim >= 3 and min(H, W) >= 32  → image key  → separate ResNet-18 encoder
+  everything else                → lowdim key → shared MLP encoder (flattened,
+                                                 all lowdim concat'd, z-scored)
+This routes large camera frames to ResNet while small spatial fields like the
+10×14×3 tactile force field are flattened + per-feature z-scored (their physical
+force units are ~1e-3 N, so the image [0,1]→[-1,1] transform would erase them).
 
 Usage:
   python alignment/training/train_classifier.py \\
@@ -27,6 +31,7 @@ Usage:
 """
 
 import copy
+import json
 import pathlib
 
 import click
@@ -58,15 +63,19 @@ class ClassifierDataset(Dataset):
         self.obs_keys = obs_keys
         self.seq_len  = seq_len
 
-        # classify each key by stored per-step shape
+        # classify each key by stored per-step shape.
+        #   true images (e.g. 256×256×3 camera) → ResNet encoder + [0,1]→[-1,1]
+        #   everything else (vectors, and small spatial fields like the 10×14×3
+        #   tactile force field) → flattened + per-feature z-score MLP.
+        # Routing is size-based, not ndim-based: a 10×14 force field is in physical
+        # force units (~1e-3 N), not [0,1], so the image *2-1 norm would crush it,
+        # and a tiny field through a 256²-oriented ResNet is wasteful.
         self.img_keys    = []
         self.lowdim_keys = []
         for key in obs_keys:
-            per_step_ndim = len(self.replay_buffer[key].shape) - 1  # strip N axis
-            if per_step_ndim >= 3:
-                self.img_keys.append(key)
-            else:
-                self.lowdim_keys.append(key)
+            per_step_shape = self.replay_buffer[key].shape[1:]  # strip N axis
+            is_image = len(per_step_shape) >= 3 and min(per_step_shape[:2]) >= 32
+            (self.img_keys if is_image else self.lowdim_keys).append(key)
 
         val_mask        = get_val_mask(
             n_episodes=self.replay_buffer.n_episodes,
@@ -80,9 +89,14 @@ class ClassifierDataset(Dataset):
             pad_after=0,
             episode_mask=self.train_mask)
 
-        # lowdim normalisation: per-feature z-score over all stored steps
+        # lowdim normalisation: per-feature z-score over all stored steps.
+        # Each key is flattened to (N, -1) first so spatial fields (e.g. the
+        # 10×14×3 tactile force field → 420 features) get per-element stats —
+        # important because the 3 channels (normal, shear-x, shear-y) differ in
+        # scale by ~4× and a single global scale would under-weight the smallest.
         if self.lowdim_keys:
-            parts = [self.replay_buffer[k][:].astype(np.float32)
+            parts = [self.replay_buffer[k][:].astype(np.float32).reshape(
+                         self.replay_buffer[k].shape[0], -1)
                      for k in self.lowdim_keys]
             all_ld = np.concatenate(parts, axis=-1)  # (N, D)
             self.lowdim_mean = torch.from_numpy(all_ld.mean(0)).float()
@@ -117,7 +131,8 @@ class ClassifierDataset(Dataset):
             obs[key] = img.permute(0, 3, 1, 2) * 2.0 - 1.0
 
         if self.lowdim_keys:
-            parts = [torch.from_numpy(sample[k].astype(np.float32))
+            parts = [torch.from_numpy(sample[k].astype(np.float32)).reshape(
+                         self.seq_len, -1)
                      for k in self.lowdim_keys]
             ld = torch.cat(parts, dim=-1)  # (T, D)
             obs['lowdim'] = (ld - self.lowdim_mean) / self.lowdim_std
@@ -199,11 +214,11 @@ class SuccessClassifier(nn.Module):
               help='Output directory for checkpoints and logs (overrides --task)')
 @click.option('--obs_keys', default='wrist,dof_force,state',
               help='Comma-separated zarr obs keys to use as input')
-@click.option('--seq_len',    default=8,    type=int,
+@click.option('--seq_len',    default=4,    type=int,
               help='Sliding window length in timesteps')
 @click.option('--device',     '-d', default='cuda:0')
 @click.option('--epochs',     default=100,  type=int)
-@click.option('--batch_size', default=256,  type=int)
+@click.option('--batch_size', default=64,  type=int)
 @click.option('--lr',         default=1e-4, type=float)
 @click.option('--val_ratio',  default=0.1,  type=float)
 @click.option('--num_workers',default=4,    type=int)
@@ -216,7 +231,7 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
          batch_size, lr, val_ratio, num_workers, pos_weight, hidden_dim):
     if task is not None:
         zarr_path  = zarr_path  or f'alignment/data/{task}.zarr'
-        output_dir = output_dir or f'alignment/classifiers/{task}'
+        output_dir = output_dir or f'models/{task}/classifiers'
     if zarr_path is None or output_dir is None:
         raise click.UsageError('Provide --task or both --zarr_path and --output_dir')
 
@@ -224,8 +239,9 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
     device     = torch.device(device)
     output_dir = pathlib.Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path  = output_dir / 'best.ckpt'
-    log_path   = output_dir / 'train_log.csv'
+    ckpt_path     = output_dir / 'best.ckpt'
+    log_path      = output_dir / 'train_log.csv'
+    settings_path = output_dir / 'settings.json'
 
     print(f'[clf] obs_keys={obs_keys}  seq_len={seq_len}')
 
@@ -253,7 +269,8 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
         num_workers=num_workers, pin_memory=True)
 
     lowdim_dim = (
-        sum(train_ds.replay_buffer[k].shape[1] for k in train_ds.lowdim_keys)
+        sum(int(np.prod(train_ds.replay_buffer[k].shape[1:]))
+            for k in train_ds.lowdim_keys)
         if train_ds.lowdim_keys else 0
     )
     model = SuccessClassifier(
@@ -262,6 +279,29 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
         seq_len=seq_len,
         hidden_dim=hidden_dim,
     ).to(device)
+
+    # Persist the full training configuration alongside the checkpoint so a run
+    # is reproducible and the inference side knows exactly how inputs were routed.
+    settings = {
+        'task':        task,
+        'zarr_path':   str(zarr_path),
+        'obs_keys':    obs_keys,
+        'img_keys':    train_ds.img_keys,
+        'lowdim_keys': train_ds.lowdim_keys,
+        'lowdim_dim':  lowdim_dim,
+        'seq_len':     seq_len,
+        'hidden_dim':  hidden_dim,
+        'batch_size':  batch_size,
+        'lr':          lr,
+        'epochs':      epochs,
+        'val_ratio':   val_ratio,
+        'pos_weight':  pos_weight,
+        'n_pos':       n_pos,
+        'n_neg':       n_neg,
+    }
+    with open(settings_path, 'w') as f:
+        json.dump(settings, f, indent=2)
+    print(f'[clf] settings → {settings_path}')
 
     pw        = torch.tensor([pos_weight], device=device) if pos_weight is not None else None
     criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
@@ -275,7 +315,8 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
-        for obs, labels in tqdm(train_loader, desc=f'epoch {epoch:3d}/{epochs}', leave=False):
+        pbar = tqdm(train_loader, desc=f'epoch {epoch:3d}/{epochs} [train]', leave=False)
+        for step, (obs, labels) in enumerate(pbar, 1):
             obs    = {k: v.to(device) for k, v in obs.items()}
             labels = labels.to(device)
             logits = model(obs)
@@ -284,6 +325,7 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
+            pbar.set_postfix(loss=f'{train_loss / step:.4f}', lr=f'{scheduler.get_last_lr()[0]:.2e}')
         train_loss /= len(train_loader)
         scheduler.step()
 
@@ -291,7 +333,7 @@ def main(task, zarr_path, output_dir, obs_keys, seq_len, device, epochs,
         val_loss = 0.0
         all_preds, all_tgts = [], []
         with torch.no_grad():
-            for obs, labels in val_loader:
+            for obs, labels in tqdm(val_loader, desc=f'epoch {epoch:3d}/{epochs} [val]  ', leave=False):
                 obs    = {k: v.to(device) for k, v in obs.items()}
                 labels = labels.to(device)
                 logits = model(obs)
