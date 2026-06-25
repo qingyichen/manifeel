@@ -230,18 +230,25 @@ def main(checkpoint, task, zarr_path, output, cfg_name, device, epochs, batch_si
 
     # log z_tacff magnitude so we can interpret the MSE scale
     with torch.no_grad():
+        # random sample
         idx = torch.randperm(len(dataset))[:256]
         sample_tacff = dataset.tacff[idx].permute(0, 3, 1, 2).to(device)
         sample_norm  = tacff_normalizer.normalize(sample_tacff)
         sample_ztacff = tacff_encoder(tacff_transform(sample_norm))
-        print(f'[align] raw tacff    — mean={dataset.tacff[idx].abs().mean():.8f}  '
-              f'max={dataset.tacff[idx].abs().max():.8f}')
-        print(f'[align] normed tacff — mean={sample_norm.abs().mean():.8f}  '
-              f'max={sample_norm.abs().max():.8f}')
-        print(f'[align] z_tacff      — mean={sample_ztacff.abs().mean():.8f}  '
-              f'std={sample_ztacff.std():.8f}  '
-              f'max={sample_ztacff.abs().max():.8f}')
-    del sample_tacff, sample_norm, sample_ztacff
+        print(f'[align] random sample — raw mean={dataset.tacff[idx].abs().mean():.8f}  '
+              f'normed mean={sample_norm.abs().mean():.8f}  '
+              f'z mean={sample_ztacff.abs().mean():.8f}  std={sample_ztacff.std():.8f}')
+
+        # top-256 steps by TacFF magnitude (contact steps)
+        tacff_mag = dataset.tacff.abs().mean(dim=(1, 2, 3))
+        top_idx   = tacff_mag.topk(256).indices
+        top_tacff = dataset.tacff[top_idx].permute(0, 3, 1, 2).to(device)
+        top_norm  = tacff_normalizer.normalize(top_tacff)
+        top_ztacff = tacff_encoder(tacff_transform(top_norm))
+        print(f'[align] contact steps — raw mean={dataset.tacff[top_idx].abs().mean():.8f}  '
+              f'normed mean={top_norm.abs().mean():.8f}  '
+              f'z mean={top_ztacff.abs().mean():.8f}  std={top_ztacff.std():.8f}')
+    del sample_tacff, sample_norm, sample_ztacff, top_tacff, top_norm, top_ztacff
 
     # ── proxy encoder ──
     lowdim_dim = 7 + 9 + 9   # state + dof_pos + dof_force
