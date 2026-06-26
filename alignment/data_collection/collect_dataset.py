@@ -92,7 +92,7 @@ def _compose_isaacgym_cfg(isaacgym_cfg_name, shape_meta, num_envs):
         print(f"[collect] hydra.compose returned incomplete isaacgym config "
               f"(keys: {sorted(isaacgym_cfg.keys())}); "
               f"loading {isaacgym_cfg_name} from yaml directly")
-        config_dir = pathlib.Path(__file__).parent.parent / 'manifeel' / 'config'
+        config_dir = pathlib.Path(__file__).resolve().parents[2] / 'manifeel' / 'config'
         base = OmegaConf.load(config_dir / isaacgym_cfg_name)
         OmegaConf.set_struct(base, False)
         if 'task' in isaacgym_cfg:
@@ -104,17 +104,37 @@ def _compose_isaacgym_cfg(isaacgym_cfg_name, shape_meta, num_envs):
 
 
 def _sample_extras(task):
-    """Read joint-state/torque/success tensors off the task at the current instant.
+    """Read joint-state/torque/force/success tensors off the task at the current instant.
 
-    Only signals measurable on a real Franka (joint sensors + own commands);
-    simulator-privileged contact forces are deliberately not recorded.
+    Real-Franka-measurable signals: joint sensors and the robot's own commands.
+    Plus an external joint torque (tau_ext) derived from contact forces — see note
+    below; this one is simulator-privileged, since the wrist F/T sensor API does
+    not register in this Isaac Gym build and dof_force reads ~0 under effort mode.
     Returns dict of (num_envs, ...) float32/uint8 numpy arrays.
     """
+    # External joint torque from the measured net contact force on the gripper
+    # assembly (panda_hand + both fingers), world frame. Internal grasp forces
+    # cancel in the sum, leaving the external reaction (insertion resistance
+    # transmitted to the wrist). Mapped to arm joint torque via the linear part
+    # of the world-frame hand Jacobian (contact tensor gives force only, no
+    # moment):  tau_ext = J_hand[:3]ᵀ · F_ext.
+    # NB: per-body contact force is simulator-privileged, unlike a real Franka's
+    # joint-torque-based tau_ext, but it is the available measured-contact signal
+    # here (acquire_force_sensor_tensor / dof_force are unusable in this build).
+    cfn = task.contact_force_net                                      # (E, n_bodies, 3)
+    wrist_force = (cfn[:, task.hand_body_id_env]
+                   + cfn[:, task.left_finger_body_id_env]
+                   + cfn[:, task.right_finger_body_id_env])           # (E, 3) world frame
+    jacobian_lin_T = task.hand_jacobian[:, 0:3, :].transpose(1, 2)    # (E, 7, 3)
+    tau_ext = torch.bmm(jacobian_lin_T, wrist_force.unsqueeze(-1)).squeeze(-1)  # (E, 7)
+
     extras = {
         'dof_pos': task.dof_pos,
         'dof_vel': task.dof_vel,
         'dof_torque_cmd': task.dof_torque,   # commanded (impedance controller)
-        'dof_force': task.dof_force_view,    # measured (DOF force sensors)
+        'dof_force': task.dof_force_view,    # measured DOF force sensors (~0 in this build)
+        'wrist_force': wrist_force,          # net contact force on gripper (world frame)
+        'tau_ext': tau_ext,                  # external joint torque (J_linᵀ · wrist_force)
     }
     extras = {k: v.detach().cpu().numpy().astype(np.float32) for k, v in extras.items()}
     success = task._check_success()
@@ -189,7 +209,7 @@ def main(checkpoint, output, cfg_name, device, isaacgym_cfg, num_envs, n_rounds,
     print(f"[collect] output: {output}")
 
     # ----- compose configs the same way eval.py does -----
-    config_dir = pathlib.Path(__file__).resolve().parent.parent / 'manifeel' / 'config'
+    config_dir = pathlib.Path(__file__).resolve().parents[2] / 'manifeel' / 'config'
     hydra.initialize_config_dir(config_dir=str(config_dir), version_base=None)
 
     overrides = _load_training_overrides(checkpoint)
