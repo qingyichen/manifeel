@@ -3,9 +3,9 @@ Offline success classifier: sequence of observations → binary success.
 
 Dataset:    the zarr produced by collect_dataset.py.
 Modalities: any subset of zarr obs keys, e.g.:
-              wrist,dof_force,state           (vision + torque)
+              wrist,tau_ext,state              (vision + external torque)
               wrist,tactile_force_field_right  (vision + tactile)
-              wrist,front,dof_force,state      (multi-view + torque)
+              wrist,front,tau_ext,state        (multi-view + external torque)
 Sequence:   sliding window of --seq_len steps over each episode;
             label = success flag at the last step of the window.
 Output:     models/<task>/classifiers/best.ckpt + train_log.csv + settings.json
@@ -20,7 +20,7 @@ force units are ~1e-3 N, so the image [0,1]→[-1,1] transform would erase them)
 
 Usage:
   python alignment/training/train_classifier.py \\
-    --task usb --obs_keys wrist,dof_force,state --seq_len 8
+    --task usb --obs_keys wrist,tau_ext,state --seq_len 8
 
   python alignment/training/train_classifier.py \\
     --task usb \\
@@ -212,12 +212,12 @@ class SuccessClassifier(nn.Module):
               help='Rollout zarr path (overrides --task)')
 @click.option('--output_dir', '-o', default=None,
               help='Output directory for checkpoints and logs (overrides --task)')
-@click.option('--obs_keys', default='wrist,dof_force,state',
+@click.option('--obs_keys', default='wrist,tau_ext,state',
               help='Comma-separated zarr obs keys to use as input')
 @click.option('--seq_len',    default=4,    type=int,
               help='Sliding window length in timesteps')
 @click.option('--device',     '-d', default='cuda:0')
-@click.option('--epochs',     default=100,  type=int)
+@click.option('--epochs',     default=50,  type=int)
 @click.option('--batch_size', default=64,  type=int)
 @click.option('--lr',         default=1e-4, type=float)
 @click.option('--val_ratio',  default=0.1,  type=float)
