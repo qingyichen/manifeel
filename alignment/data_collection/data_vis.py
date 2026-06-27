@@ -26,6 +26,7 @@ sys.stdout = open(sys.stdout.fileno(), mode="w", buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode="w", buffering=1)
 
 AXES = ['x', 'y', 'z', 'roll', 'pitch', 'yaw', 'gripper']
+FORCE_AXES = ['x', 'y', 'z']
 
 TACFF_KEYS = ('tactile_force_field_left', 'tactile_force_field_right')
 TORQUE_KEYS = ('dof_torque_cmd', 'dof_force')
@@ -57,6 +58,15 @@ def log_step(episode, i):
             # commanded and measured of the same joint share a plot path
             for j in range(value.shape[0]):
                 rr.log(f"torque/joint{j}/{key}", rr.Scalar(float(value[j])))
+        elif key == 'tau_ext':
+            # external joint torque — own group so it's easy to view as a unit
+            for j in range(value.shape[0]):
+                rr.log(f"tau_ext/joint{j}", rr.Scalar(float(value[j])))
+        elif key == 'wrist_force':
+            # 3-axis wrist F/T force, plus magnitude for quick comparison with TacFF
+            for j in range(value.shape[0]):
+                rr.log(f"wrist_force/{FORCE_AXES[j]}", rr.Scalar(float(value[j])))
+            rr.log("wrist_force/magnitude", rr.Scalar(float(np.linalg.norm(value))))
         elif key == 'action':
             for j in range(value.shape[0]):
                 rr.log(f"action/{AXES[j]}", rr.Scalar(float(value[j])))
