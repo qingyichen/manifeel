@@ -9,7 +9,8 @@ from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.common.sampler import (
     SequenceSampler, get_val_mask, downsample_mask)
-from diffusion_policy.model.common.normalizer import LinearNormalizer
+from diffusion_policy.model.common.normalizer import (
+    LinearNormalizer, SingleFieldLinearNormalizer)
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.normalize_util import get_image_range_normalizer
 
@@ -110,11 +111,44 @@ class ManifeelDataset(BaseImageDataset):
         normalizer = LinearNormalizer()
         normalizer.fit(data=data, last_n_dims=1, mode=mode, **kwargs)
         
-        # normalizer for image
+        # normalizer for image / tactile force field
         for key in self.rgb_keys:
-            normalizer[key] = get_image_range_normalizer()
-        
+            if 'tactile_force_field' in key:
+                # TacFF is a physical force field (~1e-3 N), not a [0,1] image, so
+                # the static x*2-1 image map would crush it. Use per-channel min-max
+                # → [-1,1], with one (min,max) per channel (normal, shear-x, shear-y)
+                # shared across the H*W taxels: equalises the channels' ~4x scale gap
+                # while preserving each channel's spatial contrast.
+                normalizer[key] = self._tacff_normalizer(key)
+            else:
+                normalizer[key] = get_image_range_normalizer()
+
         return normalizer
+
+    def _tacff_normalizer(self, key):
+        """Per-channel min-max [-1,1] normalizer for a tactile force field.
+
+        The policy applies obs in (..., C, H, W) layout, and LinearNormalizer maps
+        each field's flattened trailing dims via reshape(-1, C*H*W). So per-channel
+        stats are broadcast to a full (C, H, W) scale/offset whose row-major flatten
+        matches that layout — giving every taxel in a channel the same scale.
+        """
+        C, H, W = self.shape_meta['obs'][key]['shape']
+        ff = self.replay_buffer[key][:].astype(np.float32)   # (N, H, W, C) as stored
+        ch = ff.reshape(-1, ff.shape[-1])                    # (N*H*W, C)
+        ch_min = ch.min(0)
+        ch_max = ch.max(0)
+        rng = np.clip(ch_max - ch_min, 1e-4, None)           # guard near-flat channels
+        scale_c  = 2.0 / rng                                 # (C,)
+        offset_c = -1.0 - ch_min * scale_c
+        bc = lambda v: np.broadcast_to(
+            v[:, None, None], (C, H, W)).astype(np.float32)  # (C,) -> (C,H,W)
+        return SingleFieldLinearNormalizer.create_manual(
+            scale=bc(scale_c), offset=bc(offset_c),
+            input_stats_dict={
+                'min':  bc(ch_min),         'max':  bc(ch_max),
+                'mean': bc(ch.mean(0)),     'std':  bc(ch.std(0)),
+            })
 
     def __len__(self) -> int:
         return len(self.sampler)
