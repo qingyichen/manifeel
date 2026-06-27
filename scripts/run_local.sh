@@ -11,6 +11,10 @@ NUM_EPOCH=${NUM_EPOCH:-1000}
 DATASET_PATH=${DATASET_PATH:-data/usb_quan_Aug05}
 ISAACGYM_CONFIG=${ISAACGYM_CONFIG:-isaacgym_config_usb.yaml}
 
+# Workspace config. Default routes TacFF through the ResNet image encoder.
+# Set to train_tacff_diffusion.yaml to route TacFF through the ff_head MLP instead.
+CONFIG_NAME=${CONFIG_NAME:-train_diffusion_workspace.yaml}
+
 TASK_NAME=${TASK_NAME:-vision_wrist}  # vision_wrist | vistac_wrist | visff_wrist | vision_front | vistac_front | visff_front
 INPUT_TYPE=${INPUT_TYPE:-vision}   # vision | vistac | tacff
 ENV_TAG=${ENV_TAG:-usb_wrist_0805}
@@ -37,7 +41,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Build Hydra args
 # -------------------------
 HYDRA_ARGS=(
-  "--config-name=train_diffusion_workspace.yaml"
+  "--config-name=${CONFIG_NAME}"
   "task=${TASK_NAME}"
   "exp_name=${EXP_NAME}"
   "dataset_path=${DATASET_PATH}"
