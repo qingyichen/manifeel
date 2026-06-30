@@ -30,8 +30,11 @@ CONTAINER_FILE=${CONTAINER_FILE:-manifeel.sif}
 # -------------------------
 # Derived names
 # -------------------------
+# Task group for grouping outputs (e.g. pih, gear, bulb). Defaults to the leading
+# token of ENV_TAG (pih_resnet_0629 -> pih); override with TASK_TAG if needed.
+TASK_TAG=${TASK_TAG:-${ENV_TAG%%_*}}
 EXP_NAME="${INPUT_TYPE}_${ENV_TAG}_${NUM_DEMOS}"
-OUT_DIR="data/outputs/${EXP_NAME}/${SEED}"
+OUT_DIR="data/outputs/${TASK_TAG}/${EXP_NAME}/${SEED}"
 
 # Repo root resolution (script works from any directory)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
