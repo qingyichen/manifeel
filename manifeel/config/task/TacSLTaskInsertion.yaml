@@ -34,8 +34,9 @@ env:
                'right_tactile_camera_taxim': [ 320, 240, 3 ],
                'tactile_force_field_left': [ 10, 14, 3 ], 
                'tactile_force_field_right': [ 10, 14, 3 ],
-               'tactile_depth_left': [ 10, 14 ], 
+               'tactile_depth_left': [ 10, 14 ],
                'tactile_depth_right': [ 10, 14 ],
+               'client': [ 256, 256, 3 ],
     }
     stateDims: {}
 #    stateDims: { 'ee_pos': [ 3 ], 'ee_quat': [ 4 ], 'ee_lin_vel': [ 3 ], 'ee_ang_vel': [ 3 ],
@@ -84,6 +85,14 @@ env:
 
     use_camera: True
     camera_configs:
+        - name: client
+          is_body_camera: False
+          actor_name: null
+          attach_link_name: null
+          image_size: [256, 256]
+          image_type: rgb
+          horizontal_fov: 75.0
+          camera_pose: [[0.9, 0.0, 0.35], [-0.092, 0.0, 0.996, 0.0]]
         - name: wrist
           is_body_camera: True
           actor_name: franka
