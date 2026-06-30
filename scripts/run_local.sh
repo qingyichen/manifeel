@@ -64,11 +64,16 @@ fi
 # -------------------------
 # Run inside Apptainer
 # -------------------------
-apptainer exec --nv --cleanenv --env LD_PRELOAD= "${REPO_ROOT}/${CONTAINER_FILE}" bash -ic "
+# NB: non-interactive shell (bash -c, not -ic). An interactive shell turns on job
+# control and tries to grab the terminal foreground group; as a nested descendant
+# it instead gets SIGTTOU and the job auto-stops. conda is sourced explicitly from
+# the bind-mounted host install (the container itself has no conda).
+apptainer exec --nv --cleanenv --env LD_PRELOAD= "${REPO_ROOT}/${CONTAINER_FILE}" bash -c "
   set -e
+  source /home/qc/miniconda3/etc/profile.d/conda.sh
   conda activate manifeel
   export LD_LIBRARY_PATH=/.singularity.d/libs:\${CONDA_PREFIX}/lib:\${LD_LIBRARY_PATH}
   export PYTHONIOENCODING=utf-8
   cd '${REPO_ROOT}'
   python train.py ${HYDRA_ARGS[*]}
-"
+" < /dev/null
