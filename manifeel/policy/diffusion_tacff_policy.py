@@ -35,16 +35,38 @@ class DiffusionTacffPolicy(BaseImagePolicy):
             n_action_steps = 8,
             horizon = 16,
             dropout = 0.1,
+            use_conv_ff = False,
+            conv_ff_channels = (32, 64, 64),
+            conv_ff_pool = None,
             # parameters passed to step
             **kwargs
         ):
         super().__init__()
 
-        # tactile force field head
-        input_dim = 1
-        for dim in tactile_ff_shape:
-            input_dim *= dim
-        self.ff_head = MlpHead(input_dim = input_dim, output_dim = tactile_emb_dim, dropout_rate = dropout)
+        # tactile force field head. The TacFF is a (C, H, W) spatial signal (force
+        # channels over a taxel grid), so a small CNN keeps the grid topology that a
+        # flattened MLP throws away. Both heads emit a tactile_emb_dim vector.
+        self.use_conv_ff = use_conv_ff
+        if use_conv_ff:
+            c1, c2, c3 = conv_ff_channels
+            # Pool to the FULL taxel grid by default: AdaptiveAvgPool2d((H,W)) on an (H,W)
+            # map is an identity, so unlike ResNet's global 1x1 pool it does not average
+            # away spatial contrast. A Linear then projects the flattened (c3,H,W) map to
+            # tactile_emb_dim. Set conv_ff_pool to a smaller grid to downsample.
+            pool = tuple(conv_ff_pool) if conv_ff_pool is not None else tuple(tactile_ff_shape[1:])
+            self.ff_head = ConvPoolingHead(
+                input_channels = tactile_ff_shape[0],
+                conv1_out_channels = c1,
+                conv2_out_channels = c2,
+                conv3_out_channels = c3,
+                pool_output_size = pool,
+                output_dim = tactile_emb_dim,  # projected output feeds global_cond
+            )
+        else:
+            input_dim = 1
+            for dim in tactile_ff_shape:
+                input_dim *= dim
+            self.ff_head = MlpHead(input_dim = input_dim, output_dim = tactile_emb_dim, dropout_rate = dropout)
 
         # parse shapes
         action_shape = shape_meta['action']['shape']
@@ -133,6 +155,21 @@ class DiffusionTacffPolicy(BaseImagePolicy):
         return trajectory
 
 
+    def _encode_tactile(self, tactile: torch.Tensor) -> torch.Tensor:
+        """Encode a normalized (B, T, C, H, W) TacFF field into a (B, To*emb) vector.
+
+        Conv path feeds the (C, H, W) taxel grid straight into the CNN (channels =
+        force components), preserving spatial locality. MLP path flattens to (H*W*C)
+        to match the original head exactly. Only the first n_obs_steps are used.
+        """
+        B = tactile.shape[0]
+        tactile = tactile[:, :self.n_obs_steps, ...]
+        tactile = rearrange(tactile, 'b t c h w -> (b t) c h w')
+        if not self.use_conv_ff:
+            tactile = rearrange(tactile, 'b c h w -> b (h w c)')
+        feat = self.ff_head(tactile)
+        return feat.reshape(B, -1)
+
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
@@ -165,21 +202,11 @@ class DiffusionTacffPolicy(BaseImagePolicy):
         tactile_features = {}
         for key, value in nobs.items():
             if 'tactile_force_field_right' in key or 'tactile_force_field_left' in key:
-                tactile = value
-                B, _, _, _, _ = tactile.shape
-                tactile = tactile[:, :To, ...]
-                tactile = rearrange(tactile, 'b t c h w -> (b t) c h w')
-                tactile = rearrange(tactile, 'b c h w -> b h w c')
-                tactile = rearrange(tactile, 'b h w c -> b (h w c)')
-                tactile_feature = self.ff_head(tactile)
-                # rearrange to B,-1
-                tactile_feature = tactile_feature.reshape(B, -1)
-
-                tactile_features[key] = tactile_feature
+                tactile_features[key] = self._encode_tactile(value)
 
         for key, value in tactile_features.items():
             global_cond = torch.cat([global_cond, value], dim=1)
-        
+
         # empty data for action
         cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
         cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
@@ -234,17 +261,7 @@ class DiffusionTacffPolicy(BaseImagePolicy):
         tactile_features = {}
         for key, value in nobs.items():
             if 'tactile_force_field_right' in key or 'tactile_force_field_left' in key:
-                tactile = value
-                B, _, _, _, _ = tactile.shape
-                tactile = tactile[:, :self.n_obs_steps, ...]
-                tactile = rearrange(tactile, 'b t c h w -> (b t) c h w')
-                tactile = rearrange(tactile, 'b c h w -> b h w c')
-                tactile = rearrange(tactile, 'b h w c -> b (h w c)')
-                tactile_feature = self.ff_head(tactile)
-                # rearrange to B,-1
-                tactile_feature = tactile_feature.reshape(B, -1)
-
-                tactile_features[key] = tactile_feature
+                tactile_features[key] = self._encode_tactile(value)
 
         for key, value in tactile_features.items():
             global_cond = torch.cat([global_cond, value], dim=1)

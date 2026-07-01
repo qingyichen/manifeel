@@ -21,11 +21,19 @@ class SEBlock(nn.Module):
 
 
 class ConvPoolingHead(nn.Module):
-    def __init__(self, input_channels, 
-                 conv1_out_channels=128, 
-                 conv2_out_channels=256, 
+    def __init__(self, input_channels,
+                 conv1_out_channels=128,
+                 conv2_out_channels=256,
                  conv3_out_channels=512,
-                 kernel_size=3, padding=1, use_se=False):
+                 kernel_size=3, padding=1, use_se=False,
+                 pool_output_size=(1, 1), output_dim=None):
+        # pool_output_size: spatial size AFTER adaptive pooling. The default (1,1) is a
+        #   global average pool (ResNet-style) that collapses the whole map to one vector
+        #   per channel -- fine for large maps, but on a small taxel grid it averages away
+        #   spatial contrast. Pass the full (H,W) to keep every taxel (no averaging), or a
+        #   modest grid to downsample gently.
+        # output_dim: if set, flatten the pooled (C, ph, pw) map and Linear-project to it,
+        #   so spatial structure survives pooling and is only mixed in the projection.
         super(ConvPoolingHead, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=input_channels, 
                                out_channels=conv1_out_channels, 
@@ -43,7 +51,12 @@ class ConvPoolingHead(nn.Module):
                                padding=padding)
         self.ln3 = nn.LayerNorm(conv3_out_channels)
 
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool = nn.AdaptiveAvgPool2d(pool_output_size)
+        if output_dim is not None:
+            ph, pw = pool_output_size
+            self.proj = nn.Linear(conv3_out_channels * ph * pw, output_dim)
+        else:
+            self.proj = None
         if use_se:
             self.se1 = SEBlock(conv1_out_channels)
             self.se2 = SEBlock(conv2_out_channels)
@@ -70,8 +83,10 @@ class ConvPoolingHead(nn.Module):
         x = self.ln3(x)
         x = x.permute(0, 3, 1, 2)                    
         x = F.leaky_relu(x, negative_slope=0.01)
-        x = self.pool(x)                         
-        x = x.view(x.size(0), -1)                    
+        x = self.pool(x)
+        x = x.reshape(x.size(0), -1)
+        if self.proj is not None:
+            x = self.proj(x)
         return x
     
 class MlpHead(nn.Module):
