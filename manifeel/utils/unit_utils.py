@@ -26,32 +26,36 @@ class ConvPoolingHead(nn.Module):
                  conv2_out_channels=256,
                  conv3_out_channels=512,
                  kernel_size=3, padding=1, use_se=False,
-                 pool_output_size=(1, 1), output_dim=None):
-        # pool_output_size: spatial size AFTER adaptive pooling. The default (1,1) is a
-        #   global average pool (ResNet-style) that collapses the whole map to one vector
-        #   per channel -- fine for large maps, but on a small taxel grid it averages away
-        #   spatial contrast. Pass the full (H,W) to keep every taxel (no averaging), or a
-        #   modest grid to downsample gently.
-        # output_dim: if set, flatten the pooled (C, ph, pw) map and Linear-project to it,
-        #   so spatial structure survives pooling and is only mixed in the projection.
+                 pool_output_size=(1, 1), output_dim=None, dropout=0.0):
+        # Small CNN over a taxel force grid. The input is already per-channel min-max
+        # normalized to ~[-1,1] by the dataset, so this net is deliberately NORM-FREE:
+        # earlier versions applied a LayerNorm after every conv plus a final out_norm on
+        # the embedding, which subtract the per-sample mean and rescale to unit variance
+        # -- that erases the *magnitude* of the force field (how hard / which direction
+        # the contact is), the most discriminative cue for insertion. AdaptiveAvgPool is
+        # kept because averaging preserves scale (a harder press -> larger activations ->
+        # larger pooled value); only mean/variance normalization strips magnitude.
+        #
+        # pool_output_size: spatial size AFTER adaptive pooling. (1,1) is a global average
+        #   pool; on a small taxel grid prefer the full (H,W) or a modest grid to retain
+        #   spatial contrast. output_dim: if set, flatten the pooled (C,ph,pw) map and
+        #   Linear-project to it so spatial structure survives pooling.
         super(ConvPoolingHead, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=input_channels, 
-                               out_channels=conv1_out_channels, 
-                               kernel_size=kernel_size, 
+        self.conv1 = nn.Conv2d(in_channels=input_channels,
+                               out_channels=conv1_out_channels,
+                               kernel_size=kernel_size,
                                padding=padding)
-        self.ln1 = nn.LayerNorm(conv1_out_channels) 
-        self.conv2 = nn.Conv2d(in_channels=conv1_out_channels, 
-                               out_channels=conv2_out_channels, 
-                               kernel_size=kernel_size, 
+        self.conv2 = nn.Conv2d(in_channels=conv1_out_channels,
+                               out_channels=conv2_out_channels,
+                               kernel_size=kernel_size,
                                padding=padding)
-        self.ln2 = nn.LayerNorm(conv2_out_channels)
-        self.conv3 = nn.Conv2d(in_channels=conv2_out_channels, 
-                               out_channels=conv3_out_channels, 
-                               kernel_size=kernel_size, 
+        self.conv3 = nn.Conv2d(in_channels=conv2_out_channels,
+                               out_channels=conv3_out_channels,
+                               kernel_size=kernel_size,
                                padding=padding)
-        self.ln3 = nn.LayerNorm(conv3_out_channels)
 
         self.pool = nn.AdaptiveAvgPool2d(pool_output_size)
+        self.drop = nn.Dropout(dropout)
         if output_dim is not None:
             ph, pw = pool_output_size
             self.proj = nn.Linear(conv3_out_channels * ph * pw, output_dim)
@@ -61,30 +65,22 @@ class ConvPoolingHead(nn.Module):
             self.se1 = SEBlock(conv1_out_channels)
             self.se2 = SEBlock(conv2_out_channels)
         self.use_se = use_se
-        
+
     def forward(self, x):
 
-        x = self.conv1(x)                        
-        x = x.permute(0, 2, 3, 1)                  
-        x = self.ln1(x)
-        x = x.permute(0, 3, 1, 2)                    
+        x = self.conv1(x)
         x = F.leaky_relu(x, negative_slope=0.01)
         if self.use_se:
             x = self.se1(x)
-        x = self.conv2(x)                         
-        x = x.permute(0, 2, 3, 1)                   
-        x = self.ln2(x)
-        x = x.permute(0, 3, 1, 2)                    
+        x = self.conv2(x)
         x = F.leaky_relu(x, negative_slope=0.01)
         if self.use_se:
             x = self.se2(x)
-        x = self.conv3(x)                          
-        x = x.permute(0, 2, 3, 1)                    
-        x = self.ln3(x)
-        x = x.permute(0, 3, 1, 2)                    
+        x = self.conv3(x)
         x = F.leaky_relu(x, negative_slope=0.01)
         x = self.pool(x)
         x = x.reshape(x.size(0), -1)
+        x = self.drop(x)
         if self.proj is not None:
             x = self.proj(x)
         return x
@@ -104,3 +100,23 @@ class MlpHead(nn.Module):
 
     def forward(self, x):
         return self.mlp_layers(x)
+
+
+class TactileMlpHead(nn.Module):
+    """Flatten a (B, C, H, W) taxel force grid and encode it with an MLP.
+
+    Wraps MlpHead so the obs encoder can hand it the raw grid (same call signature
+    as ConvPoolingHead). Like ConvPoolingHead it is norm-free, so the per-channel
+    [-1,1] input scale -- i.e. contact magnitude -- flows through to the embedding.
+    """
+    def __init__(self, input_channels, tactile_ff_shape,
+                 hidden_dim=512, output_dim=128, dropout=0.0):
+        super(TactileMlpHead, self).__init__()
+        c, h, w = tactile_ff_shape
+        self.mlp = MlpHead(input_dim=c * h * w, hidden1_dim=hidden_dim,
+                           hidden2_dim=hidden_dim, output_dim=output_dim,
+                           dropout_rate=dropout)
+
+    def forward(self, x):
+        x = x.reshape(x.size(0), -1)
+        return self.mlp(x)

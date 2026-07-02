@@ -49,11 +49,15 @@ class DiffusionTacffPolicy(BaseImagePolicy):
         self.use_conv_ff = use_conv_ff
         if use_conv_ff:
             c1, c2, c3 = conv_ff_channels
-            # Pool to the FULL taxel grid by default: AdaptiveAvgPool2d((H,W)) on an (H,W)
-            # map is an identity, so unlike ResNet's global 1x1 pool it does not average
-            # away spatial contrast. A Linear then projects the flattened (c3,H,W) map to
-            # tactile_emb_dim. Set conv_ff_pool to a smaller grid to downsample.
-            pool = tuple(conv_ff_pool) if conv_ff_pool is not None else tuple(tactile_ff_shape[1:])
+            # Downsample the taxel grid by default. A full-grid AdaptiveAvgPool2d((H,W))
+            # is an identity, which makes proj a Linear over the whole c3*H*W map: high
+            # capacity (overfits on few demos) and a large-norm embedding. Halving each
+            # dim keeps spatial contrast while shrinking proj; conv_ff_pool overrides it.
+            if conv_ff_pool is not None:
+                pool = tuple(conv_ff_pool)
+            else:
+                H, W = tactile_ff_shape[1], tactile_ff_shape[2]
+                pool = (max(1, H // 2), max(1, W // 2))
             self.ff_head = ConvPoolingHead(
                 input_channels = tactile_ff_shape[0],
                 conv1_out_channels = c1,
@@ -61,6 +65,7 @@ class DiffusionTacffPolicy(BaseImagePolicy):
                 conv3_out_channels = c3,
                 pool_output_size = pool,
                 output_dim = tactile_emb_dim,  # projected output feeds global_cond
+                dropout = dropout,             # regularize the conditioning pathway
             )
         else:
             input_dim = 1
