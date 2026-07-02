@@ -2,13 +2,32 @@ name: vision_tacff
 
 image_shape: &image_shape [3, 256, 256]
 shape_meta: &shape_meta
-  # acceptable types: rgb, low_dim
+  # acceptable types: rgb, low_dim, tactile
   obs:
     wrist:
       shape: *image_shape
       type: rgb
     tactile_force_field_right:
       shape: [3, 10, 14]
+      # 'tactile' (not 'rgb'): the obs encoder routes this through a small dedicated
+      # CNN/MLP with per-channel [-1,1] normalization, NOT the ResNet + imagenet_norm
+      # image path (which collapses a 10x14 force grid to a dead channel).
+      type: tactile
+    state:
+      shape: [7]
+      type: low_dim
+  action:
+    shape: [6]
+
+# shape_meta the ResNet image encoder sees: cameras + state only.
+# tactile_force_field_* is deliberately omitted so it is NOT run through the
+# image encoder (a 10x14 field collapses under ResNet downsampling + meaningless
+# imagenet_norm). It stays in the full shape_meta above, so the dataset loads and
+# per-channel-normalizes it, and DiffusionTacffPolicy routes it to its ff_head.
+obs_encoder_shape_meta: &obs_encoder_shape_meta
+  obs:
+    wrist:
+      shape: *image_shape
       type: rgb
     state:
       shape: [7]

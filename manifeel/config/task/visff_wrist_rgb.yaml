@@ -1,0 +1,47 @@
+name: vision_tacff
+
+# FAULTY BASELINE task: reproduces the original dead-TacFF run. `type: rgb` routes the
+# 10x14 force grid through the image path (ResNet18 + imagenet_norm), and `norm: image`
+# forces the legacy [0,1]->[-1,1] normalizer, which collapses the ~1e-3 N forces to a
+# near-constant (dead) channel. Together these are the two faults discussed; use this
+# as the "naive tactile-as-image" baseline. The corrected route is task visff_wrist.
+image_shape: &image_shape [3, 256, 256]
+shape_meta: &shape_meta
+  obs:
+    wrist:
+      shape: *image_shape
+      type: rgb
+    tactile_force_field_right:
+      shape: [3, 10, 14]
+      type: rgb
+      norm: image   # legacy dead normalization (baseline only)
+    state:
+      shape: [7]
+      type: low_dim
+  action:
+    shape: [6]
+
+env_runner:
+  _target_: manifeel.env_runner.vistac_pih_runner_unit.ManifeelRunner
+  shape_meta: ${shape_meta}
+  isaacgym_cfg_name: ${isaacgym_cfg_name}
+  n_test: 50
+  n_test_vis: 2
+  test_start_seed: 100000
+  max_steps: 500
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  fps: 10
+  past_action: ${past_action_visible}
+  tactile_size: [224, 224]
+
+dataset:
+  _target_: manifeel.dataset.manifeel_dataset_equidp.ManifeelDataset
+  shape_meta: ${shape_meta}
+  zarr_path: ${dataset_path}
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.02
+  max_train_episodes: 30
