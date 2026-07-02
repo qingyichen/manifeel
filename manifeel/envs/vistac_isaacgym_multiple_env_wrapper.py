@@ -55,7 +55,10 @@ class MultipleIsaacEnvWrapper():
         obs_shape_meta = shape_meta['obs']
         for key, attr in obs_shape_meta.items():
             type = attr.get('type', 'low_dim')
-            if type == 'rgb':
+            # 'tactile' force grids ride the rgb key list here so they are returned to
+            # the policy (task_obs_keys) and get their special-cased render path; only
+            # the obs encoder treats them differently from images.
+            if type in ('rgb', 'tactile'):
                 rgb_keys.append(key)
             elif type == 'low_dim':
                 lowdim_keys.append(key)
