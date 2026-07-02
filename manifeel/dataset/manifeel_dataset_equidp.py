@@ -39,7 +39,10 @@ class ManifeelDataset(BaseImageDataset):
         obs_shape_meta = shape_meta['obs']
         for key, attr in obs_shape_meta.items():
             type = attr.get('type', 'low_dim')
-            if type == 'rgb':
+            # 'tactile' force grids share the rgb load path (grid array -> CHW) and the
+            # per-channel min-max normalizer keyed on the 'tactile_force_field' name in
+            # get_normalizer; only the obs encoder treats them differently.
+            if type in ('rgb', 'tactile'):
                 rgb_keys.append(key)
             elif type == 'low_dim':
                 lowdim_keys.append(key)
@@ -113,12 +116,14 @@ class ManifeelDataset(BaseImageDataset):
         
         # normalizer for image / tactile force field
         for key in self.rgb_keys:
-            if 'tactile_force_field' in key:
-                # TacFF is a physical force field (~1e-3 N), not a [0,1] image, so
-                # the static x*2-1 image map would crush it. Use per-channel min-max
-                # → [-1,1], with one (min,max) per channel (normal, shear-x, shear-y)
-                # shared across the H*W taxels: equalises the channels' ~4x scale gap
-                # while preserving each channel's spatial contrast.
+            attr = self.shape_meta['obs'].get(key, {})
+            # `norm: image` (baseline only) forces the legacy [0,1]->[-1,1] image map;
+            # on a ~1e-3 N force grid that collapses every taxel to ~-1, i.e. a dead
+            # channel -- this reproduces the original faulty TacFF baseline. Without it
+            # TacFF gets the correct per-channel min-max [-1,1] normalizer (one (min,max)
+            # per channel shared across taxels, equalising the channels' ~4x scale gap
+            # while preserving each channel's spatial contrast).
+            if 'tactile_force_field' in key and attr.get('norm') != 'image':
                 normalizer[key] = self._tacff_normalizer(key)
             else:
                 normalizer[key] = get_image_range_normalizer()
