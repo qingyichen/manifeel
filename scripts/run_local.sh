@@ -23,6 +23,11 @@ LOG_NAME=${LOG_NAME:-dp_usb_tacff}
 # Optional Hydra overrides
 IMAGENET_NORM=${IMAGENET_NORM:-false}   # set true for tacff runs if needed
 ACTION_SHAPE=${ACTION_SHAPE:-}          # set to 7 for gripper tasks, leave empty otherwise
+USE_CONV_FF=${USE_CONV_FF:-}            # legacy: route TacFF through the CNN ff_head (train_tacff_diffusion.yaml only)
+# TacFF obs-encoder architecture for the default image workspace (train_diffusion_workspace.yaml
+# + TASK_NAME=visff_wrist). Selects the small dedicated tactile encoder; TacFF is per-channel
+# normalized and skips ResNet/imagenet_norm. Values: cnn | mlp. Leave empty to use the config default (cnn).
+FF_ARCH=${FF_ARCH:-}
 
 # Container file (default assumes you run from repo root and built it there)
 CONTAINER_FILE=${CONTAINER_FILE:-manifeel.sif}
@@ -35,6 +40,10 @@ CONTAINER_FILE=${CONTAINER_FILE:-manifeel.sif}
 TASK_TAG=${TASK_TAG:-${ENV_TAG%%_*}}
 EXP_NAME="${INPUT_TYPE}_${ENV_TAG}_${NUM_DEMOS}"
 OUT_DIR="data/outputs/${TASK_TAG}/${EXP_NAME}/${SEED}"
+# wandb run name (logging.name = ${now}_${exp_name}). Drop the trailing date token
+# from ENV_TAG (pih_ffcnn_0629 -> pih_ffcnn) and the demo count so runs group cleanly
+# in wandb; OUT_DIR still uses the full EXP_NAME to keep runs distinct on disk.
+RUN_NAME="${INPUT_TYPE}_${ENV_TAG%_[0-9]*}"
 
 # Repo root resolution (script works from any directory)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +55,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HYDRA_ARGS=(
   "--config-name=${CONFIG_NAME}"
   "task=${TASK_NAME}"
-  "exp_name=${EXP_NAME}"
+  "exp_name=${RUN_NAME}"
   "dataset_path=${DATASET_PATH}"
   "isaacgym_cfg_name=${ISAACGYM_CONFIG}"
   "training.seed=${SEED}"
@@ -62,6 +71,15 @@ fi
 
 if [[ -n "${ACTION_SHAPE}" ]]; then
   HYDRA_ARGS+=("task.shape_meta.action.shape=[${ACTION_SHAPE}]")
+fi
+
+if [[ -n "${USE_CONV_FF}" ]]; then
+  HYDRA_ARGS+=("policy.use_conv_ff=${USE_CONV_FF}")
+fi
+
+if [[ -n "${FF_ARCH}" ]]; then
+  # tactile encoder architecture: cnn | mlp (train_diffusion_workspace.yaml only)
+  HYDRA_ARGS+=("policy.obs_encoder.tactile_arch=${FF_ARCH}")
 fi
 
 # -------------------------

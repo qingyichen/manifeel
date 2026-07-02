@@ -19,8 +19,8 @@ os.environ["HYDRA_FULL_ERROR"] = "1"
 
 import sys
 # use line-buffering for both stdout and stderr
-sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
-sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
+sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1, encoding='utf-8')
+sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1, encoding='utf-8')
 
 import hydra
 from omegaconf import OmegaConf
