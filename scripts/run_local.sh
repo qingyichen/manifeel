@@ -82,6 +82,26 @@ if [[ -n "${FF_ARCH}" ]]; then
   HYDRA_ARGS+=("policy.obs_encoder.tactile_arch=${FF_ARCH}")
 fi
 
+# Append the TacFF encoder architecture to task.name so wandb run names distinguish
+# the route: *_resnet tasks push TacFF through the ResNet18 image path with the
+# correct per-channel normalizer -> "resnet"; *_rgb keeps the legacy dead [0,1]
+# image normalizer (kept on purpose as the faulty-baseline ablation) ->
+# "resnet_deadnorm"; otherwise the dedicated tactile head is used -> tactile_arch
+# (FF_ARCH, config default cnn). e.g. train_diffusion_unet_image_vision_tacff_cnn.
+# Vision-only / vistac runs are untouched. The base name is read from the task yaml
+# (visff_wrist and visff_front differ), so this stays correct if task names change.
+if [[ "${INPUT_TYPE}" == "tacff" ]]; then
+  if [[ "${TASK_NAME}" == *_resnet ]]; then
+    ARCH_TAG="resnet"
+  elif [[ "${TASK_NAME}" == *_rgb ]]; then
+    ARCH_TAG="resnet_deadnorm"
+  else
+    ARCH_TAG="${FF_ARCH:-cnn}"
+  fi
+  TASK_BASE_NAME=$(awk '/^name:/{print $2; exit}' "${REPO_ROOT}/manifeel/config/task/${TASK_NAME}.yaml")
+  HYDRA_ARGS+=("task.name=${TASK_BASE_NAME}_${ARCH_TAG}")
+fi
+
 # -------------------------
 # Run inside Apptainer
 # -------------------------
