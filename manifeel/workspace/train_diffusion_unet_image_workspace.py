@@ -271,20 +271,21 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     if cfg.checkpoint.save_last_snapshot:
                         self.save_snapshot()
 
-                    # # sanitize metric names
-                    # metric_dict = dict()
-                    # for key, value in step_log.items():
-                    #     new_key = key.replace('/', '_')
-                    #     metric_dict[new_key] = value
-                    
-                    # # We can't copy the last checkpoint here
-                    # # since save_checkpoint uses threads.
-                    # # therefore at this point the file might have been empty!
-                    # topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-
-                    # if topk_ckpt_path is not None:
-                    #     self.save_checkpoint(path=topk_ckpt_path,
-                    #                             epoch=self.epoch)
+                    # topk checkpoints ranked by rollout success. Rollout success (not
+                    # train_loss) is the right monitor: train_loss keeps decreasing while
+                    # rollout success peaks ~ep60-90 then degrades (BC overfitting /
+                    # covariate shift), so min-train_loss would select the WORST policies.
+                    # Metric names are sanitized ('/' -> '_'); the monitored key only
+                    # exists on rollout epochs (rollout_every), so gate on its presence.
+                    metric_dict = dict()
+                    for key, value in step_log.items():
+                        new_key = key.replace('/', '_')
+                        metric_dict[new_key] = value
+                    if topk_manager.monitor_key in metric_dict:
+                        topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                        if topk_ckpt_path is not None:
+                            self.save_checkpoint(path=topk_ckpt_path,
+                                                 epoch=self.epoch)
                 # ========= eval end for this epoch ==========
                 policy.train()
 
