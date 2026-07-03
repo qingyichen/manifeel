@@ -303,9 +303,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         if path is None:
             path = pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}_epoch{epoch}.ckpt')
         else:
-            path = pathlib.Path(path)  # Convert string to pathlib.Path
-            path = path.with_name(f'{path.stem}_epoch{epoch}.ckpt')
-            # path = pathlib.Path(path).with_name(f'{path.stem}_epoch{epoch}.ckpt')
+            # Respect the caller's exact filename. TopK paths are already epoch-stamped
+            # (epoch={epoch:04d}-test_mean_score=...); the old rename appended _epoch{N},
+            # which (a) desynced TopKCheckpointManager's bookkeeping and (b) made the file
+            # match _prune_checkpoints' *_epoch{N}.ckpt pattern, so every topk checkpoint
+            # was deleted within 3 epochs of being written.
+            path = pathlib.Path(path)
         if exclude_keys is None:
             exclude_keys = tuple(self.exclude_keys)
         if include_keys is None:
@@ -395,8 +398,13 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         return None
 
 def _prune_checkpoints(checkpoint_dir):
-    """Keep only the last three epoch checkpoints in the folder."""
-    checkpoint_files = list(checkpoint_dir.glob('*.ckpt'))
+    """Keep only the last three rolling 'latest' checkpoints.
+
+    Scoped to latest_*.ckpt on purpose: the topk (best-rollout) checkpoints live in
+    the same folder and must never be pruned by epoch recency — TopKCheckpointManager
+    does its own worst-score eviction.
+    """
+    checkpoint_files = list(checkpoint_dir.glob('latest_*.ckpt'))
     # Extract epoch numbers from filenames using regex
     epoch_files = []
     for file in checkpoint_files:
